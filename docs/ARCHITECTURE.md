@@ -11,11 +11,11 @@
 | Part | Status |
 |---|---|
 | Database schema and server API | Done; 25 tests pass on plain Postgres 16 and on Supabase's Postgres image |
-| Player website (`web/`) | Done with mock songs; browser test passes (host plus 3 players, 12 tracks) |
+| Player website (`web/`) | Live on GitHub Pages with mock songs; browser tests pass locally and against the hosted project |
 | Browser test host (`web/host.html`) | Done; mock playback, no audio, for testing only |
 | Apple Music search function | Written, not yet run (needs a MusicKit key) |
 | iOS host app | Not started; needs a Mac (see `docs/IOS_HOST_HANDOFF.md`) |
-| Live updates (Realtime) | Coded; not testable in the cloud workspace (no IPv6), so tested with polling |
+| Live updates (Realtime) | Verified on the hosted project: full 4-browser game with polling disabled (`web-tests/e2e-live.mjs`) |
 
 ## 3. Privacy and fairness rules, and how they're enforced
 
