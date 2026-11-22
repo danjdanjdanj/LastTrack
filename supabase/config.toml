@@ -11,4 +11,5 @@ enable_anonymous_sign_ins = true
 enable_signup = true
 
 [realtime]
+# Set to false only to run the local stack on hosts without IPv6 (Realtime cannot bind).
 enabled = true

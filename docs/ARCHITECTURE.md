@@ -1,75 +1,70 @@
 # Last Track: architecture and plan
 
-Status: backend built and tested (25 tests passing). iOS client on hold until a Mac is connected.
+## 1. Shape of the product
 
-## 1. Architecture
+1. **Host:** the only person with the iPhone app. Sets songs per player (3, 4 or 5), shares a QR code, picks their own songs, watches the lobby (for example "Danya 5/5, Tim 4/5"), presses **GO!** and plays everything through their Apple Music.
+2. **Players:** scan the QR code and use a web page. No app and no account. They pick songs secretly, then follow the live dashboard, reveals and result on the same page.
+3. **Backend:** Supabase (Postgres, anonymous sign-in, Realtime, one Edge Function for Apple Music search).
 
-1. **iOS app (SwiftUI, iOS 17+).** Thin client. Three swappable services behind protocols:
-   - a. `CatalogService`: Apple Music search (MusicKit, AU catalogue) or a mock.
-   - b. `PlaybackService`: `ApplicationMusicPlayer` with a one-song queue, or a mock timer player.
-   - c. `GameBackend`: Supabase RPC plus Realtime, or an in-memory fake for UI tests and previews.
-2. **Supabase.** Postgres, anonymous auth and Realtime.
-   - a. All real tables live in schema `private`, which API roles cannot reach.
-   - b. Clients call 15 `SECURITY DEFINER` functions only. Each one checks the session, room membership, host role and room state.
-   - c. The one readable table is `public.room_public_state`, a whitelisted JSON document per room, protected by RLS and streamed by Realtime.
-3. **Apple Music.** Only the host's device plays music. Players' devices only search. No audio is stored, only catalogue IDs and display metadata.
+## 2. Status
 
-## 2. How the brief's guarantees are enforced
+| Part | Status |
+|---|---|
+| Database schema and server API | Done; 25 tests pass on plain Postgres 16 and on Supabase's Postgres image |
+| Player website (`web/`) | Done with mock songs; browser test passes (host plus 3 players, 12 tracks) |
+| Browser test host (`web/host.html`) | Done; mock playback, no audio, for testing only |
+| Apple Music search function | Written, not yet run (needs a MusicKit key) |
+| iOS host app | Not started; needs a Mac (see `docs/IOS_HOST_HANDOFF.md`) |
+| Live updates (Realtime) | Coded; not testable in the cloud workspace (no IPv6), so tested with polling |
+
+## 3. Privacy and fairness rules, and how they're enforced
 
 | Requirement | Mechanism |
 |---|---|
-| No accounts | Supabase anonymous sign-in; session in the iOS Keychain |
-| Duplicate song IDs blocked atomically | `unique(room_id, apple_music_song_id)` with `on conflict do nothing`; tested with 12 simultaneous adds |
-| Neutral duplicate message | Returns only `already_selected` |
-| Equal quota | Row lock per player, plus an exact-count check on ready and on lock |
-| Nobody sees others' picks, including the host | Private schema; `my_nominations` returns the caller's own only |
-| One unbiased shuffle, never changed | Fisher–Yates using `gen_random_bytes` with rejection sampling, run once inside `lock_room` under a row lock; chi-square tested |
+| No accounts | Supabase anonymous sign-in. Players' sessions are stored in the browser; the host's session is stored in the iOS Keychain |
+| Duplicate songs blocked atomically | Unique index on (room, Apple Music song ID). Tested with 12 simultaneous adds |
+| Neutral duplicate message | Server says only `already_selected`; page shows "Already selected. Pick another song." |
+| Lobby counts | `submitted_count` per player, lobby only. Nulled the moment the game locks |
+| GO needs everyone full | `lock_room` checks every active player has exactly the quota, under a row lock |
+| Nobody sees others' picks, host included | All real tables are in a `private` schema that clients cannot reach. `my_nominations` returns the caller's own only |
+| One unbiased shuffle, never changed | Fisher–Yates with `gen_random_bytes` and rejection sampling, inside `lock_room`. Chi-square tested |
 | Host can't see the future queue | `host_play` returns one song ID, at the moment it starts |
-| No per-player counts leaked | State JSON keys are whitelisted; a test walks a full game and checks every player's view after each step |
-| IN/OUT only changes on reveal | Status is derived from completed entries only; the current track counts as remaining |
-| Winner = owner of the last track | Set server-side when the last position completes |
-| No skipping | Completion rejected unless the server clock shows the track has nearly finished (10s tolerance) |
-| Recovery | `host_play` is idempotent and returns the current track plus elapsed time; clients refetch state on reconnect |
+| Nothing leaks over the network | Clients read one whitelisted JSON document per room (RLS: members only). Browser test records every response a player receives and checks that no upcoming song appears before it plays |
+| IN/OUT changes only on reveal | Derived from completed tracks; the playing track counts as remaining |
+| Winner | Owner of the last track in the locked order, set by the server |
+| No skipping | Server rejects "track finished" until the track has nearly played out by the server clock |
+| Recovery | `host_play` is idempotent and returns the current track and elapsed time. Pages re-fetch on reconnect, when brought back on screen and every 10s |
+| Unplayable songs | Search only offers songs playable in the AU catalogue, so players replace before GO. If one still fails mid-game: retry, then the host marks it unplayable (revealed, counts as played, order unchanged) |
 
 **Conventions:**
-1. `remaining_count` includes the track currently playing.
-2. Missing durations are replaced by the average of known durations, with `remaining_is_estimate=true`.
+1. "Tracks left" includes the track currently playing.
+2. Missing durations use the average of known durations, and time left shows "≈".
 
-## 3. Game state machine
+## 4. Apple Music
 
-`lobby → ready → playing ⇄ paused → reveal → (host taps Play next) → playing … → finished`
+1. **Catalogue:** Australia (`au`) only.
+2. **Host app:** MusicKit `ApplicationMusicPlayer`. The developer token is automatic once the MusicKit App Service is enabled on the App ID, so no key goes in the app. Needs the `audio` background mode. Check `MusicSubscription.current.canPlayCatalogContent` before GO.
+3. **Player search:** the website can't use MusicKit on iPhone, so `supabase/functions/catalog-search` calls the Apple Music API (`/v1/catalog/au/search`) with a developer token signed on the server.
+   - a. Needs a MusicKit private key (Apple Developer account → Keys).
+   - b. Stored as Supabase function secrets: `APPLE_MUSIC_TEAM_ID`, `APPLE_MUSIC_KEY_ID`, `APPLE_MUSIC_PRIVATE_KEY`.
+4. **Not yet verified on a device:** AirPlay and Bluetooth routes, Screen Time explicit-content restrictions on the host phone, and long background play.
+5. **Terms:** check Apple Music identity guidelines and usage terms before any commercial release.
 
-On a playback error: `playing/paused → failed → playing` (retry) or `reveal` (marked unplayable).
+## 5. Next steps
 
-## 4. Apple Music findings
+1. iOS host app on a Mac (handoff brief written).
+2. Create the Supabase project, deploy the schema and search function, host `web/` (GitHub Pages is the simplest option), and switch `catalog` to `apple`.
+3. Device test with a real Apple Music subscription (section 6).
 
-1. MusicKit for Swift, catalogue search, `ApplicationMusicPlayer` and `MusicSubscription` all need iOS 15+, so iOS 17 is fine.
-2. Apple generates the developer token automatically once the MusicKit App Service is enabled on the App ID. No private key goes in the app, and no server-side token is needed for iOS.
-3. Background play needs the `audio` background mode in Info.plist.
-4. Check `MusicSubscription.current.canPlayCatalogContent` on the host's device before locking.
-5. **Not verified in the docs:** whether catalogue search needs `.authorized` consent or a subscription. Plan: every player taps "Allow Apple Music" once, and we test on a non-subscribed device. If search fails there, the fallback is a small Supabase Edge Function that proxies search with a server-held MusicKit key. That would need your approval.
-6. **Not verified in the docs:** AirPlay behaviour. Expected to follow standard iOS audio routes; test on a device.
-7. Licensing and usage terms for games are unclear. Check the Apple Music identity guidelines and terms before any commercial release.
+## 6. Must be tested on real devices
 
-## 5. Phased plan
+1. Host iPhone with an Apple Music subscription: full game, screen locked, app in background, AirPlay or Bluetooth.
+2. Players on iPhone Safari and Android Chrome: join by QR code, search, live updates.
+3. Wi-Fi drop on host and players mid-track; host force-quits and relaunches.
+4. Host with Screen Time explicit-content restrictions turned on.
 
-1. Done: backend schema, API, privacy and security tests.
-2. Next (needs Mac): Xcode project; mock services; all eight screens; full four-simulator game against local Supabase.
-3. Real MusicKit search (AU) and playback behind the same protocols.
-4. Reconnect and backgrounding hardening, plus UI tests.
-5. Device testing (see section 7).
+## 7. Known limitations
 
-## 6. Decisions pending approval
-
-1. **Mid-game unplayable track.** Unplayable tracks are prevented up front: players can only pick songs that are playable in the AU catalogue, and must replace them before submitting. A track can still fail mid-game. In that case the host can retry, then mark it unplayable: it's revealed, counts as played for its owner, and the order is unchanged. Approve or change.
-2. **Reveal advance.** The host taps "Play next" after each reveal, as the brief prefers. There's no auto-advance.
-3. **Final track.** It plays to completion before the winner is shown, as the brief's default.
-4. **Room limits.** 2 to 16 players. Rooms are not cleaned up automatically yet; I'll add a daily purge of rooms older than 48 hours.
-5. **Song metadata.** Title, artist and duration are supplied by the client. A tampered client could only mislabel its own song. Server-side validation would need the search-proxy option above.
-
-## 7. Physical iPhone testing required
-
-1. Host with an active Apple Music subscription: full game, background play, screen locked, AirPlay or Bluetooth.
-2. Player without a subscription: search works (open question 4.5).
-3. Host with Screen Time explicit-content restrictions: what happens with explicit songs.
-4. Network drop on host and players mid-track; host force-quit and relaunch.
+1. Song metadata comes from the player's browser. A tampered page could mislabel only its own song. The order and the owners are unaffected.
+2. Rooms are not cleaned up automatically yet (planned: delete rooms older than 48 hours).
+3. Up to 16 players per room.
