@@ -1,0 +1,11 @@
+node_modules/
+.DS_Store
+xcuserdata/
+DerivedData/
+*.xcuserstate
+build/
+.build/
+supabase/.temp/
+supabase/.branches/
+.env
+Secrets.xcconfig

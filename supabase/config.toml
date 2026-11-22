@@ -1,0 +1,14 @@
+# Minimal Supabase CLI config for Last Track. `supabase init` may add more defaults.
+project_id = "last-track"
+
+[api]
+# Only `public` is exposed. The `private` schema must never be added here.
+schemas = ["public"]
+
+[auth]
+# Players never register: each device signs in anonymously and keeps its session in the Keychain.
+enable_anonymous_sign_ins = true
+enable_signup = true
+
+[realtime]
+enabled = true
