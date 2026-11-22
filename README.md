@@ -31,6 +31,6 @@ On machines without IPv6, set `[realtime] enabled = false` in `supabase/config.t
 ## Try it locally in a browser
 
 1. Run `npx supabase start`.
-2. Put the printed anon key into `web/config.js`.
+2. Point `web/config.js` at the local stack (`http://127.0.0.1:54321` and the printed anon key); the committed file points at the live project.
 3. Serve `web/` with any static server, for example `npx http-server web -p 8080`.
 4. Open `http://localhost:8080/host.html` to host, and `index.html?code=…&seat=2` in other tabs as players (`seat` keeps tabs separate).
