@@ -49,7 +49,6 @@ create table private.participants (
   user_id      uuid not null,
   nickname     text not null check (char_length(nickname) between 1 and 20),
   is_host      boolean not null default false,
-  is_ready     boolean not null default false,
   joined_at    timestamptz not null default now(),
   removed_at   timestamptz,
   unique (room_id, user_id)
@@ -270,7 +269,10 @@ begin
            'id', p.id,
            'nickname', p.nickname,
            'is_host', p.is_host,
-           'ready', case when r.status = 'lobby' then p.is_ready else true end,
+           -- Lobby only: how many songs each player has picked (e.g. 4/5). Nulled once the
+           -- game is locked so per-player counts can never leak during play.
+           'submitted_count', case when r.status = 'lobby' then
+              (select count(*) from private.nominations x where x.participant_id = p.id) end,
            'status', case
               when r.status = 'lobby' then 'in'
               when p.id = r.winner_participant_id then 'winner'
@@ -472,7 +474,7 @@ declare
   me private.participants := private.require_member(p_room_id);
 begin
   return jsonb_build_object('room_id', me.room_id, 'participant_id', me.id,
-                            'nickname', me.nickname, 'is_host', me.is_host, 'is_ready', me.is_ready);
+                            'nickname', me.nickname, 'is_host', me.is_host);
 end;
 $$;
 
@@ -514,10 +516,6 @@ begin
   end if;
   -- Row lock on the caller serialises their own concurrent adds (quota race).
   perform 1 from private.participants p where p.id = me.id for update;
-  select * into me from private.participants p where p.id = me.id;
-  if me.is_ready then
-    raise exception 'already_submitted' using errcode = 'P0001';
-  end if;
   select count(*) into cnt from private.nominations n where n.participant_id = me.id;
   if cnt >= r.song_quota then
     return jsonb_build_object('ok', false, 'error', 'quota_full');
@@ -534,6 +532,7 @@ begin
   if nid is null then
     return jsonb_build_object('ok', false, 'error', 'already_selected');
   end if;
+  perform private.refresh_public_state(p_room_id);
   return jsonb_build_object('ok', true, 'id', nid, 'count', cnt + 1, 'quota', r.song_quota);
 end;
 $$;
@@ -550,37 +549,12 @@ begin
   if r.status <> 'lobby' then
     raise exception 'game_already_started' using errcode = 'P0001';
   end if;
-  if me.is_ready then
-    raise exception 'already_submitted' using errcode = 'P0001';
-  end if;
   delete from private.nominations n where n.id = p_nomination_id and n.participant_id = me.id;
+  if found then
+    perform private.refresh_public_state(p_room_id);
+  end if;
   -- Same response whether the id was someone else's or nonexistent.
   return jsonb_build_object('ok', true);
-end;
-$$;
-
--- Submit (true) requires exactly the quota. Un-submit (false) re-opens editing.
-create or replace function public.set_ready(p_room_id uuid, p_ready boolean)
-returns jsonb
-language plpgsql volatile security definer set search_path = ''
-as $$
-declare
-  me  private.participants := private.require_member(p_room_id);
-  r   private.rooms;
-  cnt int;
-begin
-  select * into r from private.rooms where id = p_room_id for share;
-  if r.status <> 'lobby' then
-    raise exception 'game_already_started' using errcode = 'P0001';
-  end if;
-  perform 1 from private.participants p where p.id = me.id for update;
-  select count(*) into cnt from private.nominations n where n.participant_id = me.id;
-  if p_ready and cnt <> r.song_quota then
-    raise exception 'quota_not_met' using errcode = 'P0001';
-  end if;
-  update private.participants set is_ready = p_ready where id = me.id;
-  perform private.refresh_public_state(p_room_id);
-  return jsonb_build_object('ok', true, 'ready', p_ready);
 end;
 $$;
 
@@ -600,7 +574,7 @@ begin
     raise exception 'cannot_remove_host' using errcode = 'P0001';
   end if;
   delete from private.nominations n where n.participant_id = p_participant_id and n.room_id = p_room_id;
-  update private.participants set removed_at = now(), is_ready = false
+  update private.participants set removed_at = now()
   where id = p_participant_id and room_id = p_room_id and removed_at is null;
   if not found then
     raise exception 'participant_not_found' using errcode = 'P0001';
@@ -635,9 +609,8 @@ begin
   end if;
   if exists (select 1 from private.participants p
              where p.room_id = r.id and p.removed_at is null
-               and (not p.is_ready
-                    or (select count(*) from private.nominations x where x.participant_id = p.id)
-                       <> r.song_quota)) then
+               and (select count(*) from private.nominations x where x.participant_id = p.id)
+                   <> r.song_quota) then
     raise exception 'players_not_ready' using errcode = 'P0001';
   end if;
 
@@ -903,7 +876,7 @@ begin
     join pg_namespace ns on ns.oid = p.pronamespace
     where ns.nspname = 'public' and p.proname in (
       'create_room', 'join_room', 'get_my_seat', 'my_nominations', 'add_nomination',
-      'remove_nomination', 'set_ready', 'remove_participant', 'lock_room', 'host_play',
+      'remove_nomination', 'remove_participant', 'lock_room', 'host_play',
       'host_set_paused', 'host_complete_track', 'host_report_failure',
       'host_mark_unplayable', 'create_rematch', 'is_room_member')
   loop

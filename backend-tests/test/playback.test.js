@@ -73,7 +73,6 @@ test('missing durations fall back to an estimate and are flagged', async () => {
     for (let i = 0; i < 3; i++) {
       await u.rpc('add_nomination', { p_room_id: room.room_id, ...song({ p_duration_ms: u === p && i === 0 ? null : 200000 }) });
     }
-    await u.rpc('set_ready', { p_room_id: room.room_id, p_ready: true });
   }
   await host.rpc('lock_room', { p_room_id: room.room_id });
   const st = await host.state(room.room_id);

@@ -81,14 +81,17 @@ test('full game never exposes unplayed nominations, owners, order or per-player 
   const TOP = ['room_id', 'code', 'status', 'phase', 'song_quota', 'storefront', 'host_participant_id',
     'players', 'total_tracks', 'remaining_count', 'remaining_ms', 'remaining_is_estimate',
     'now_playing', 'last_reveal', 'history', 'winner', 'rematch_code', 'revision'].sort();
-  const PLAYER = ['id', 'nickname', 'is_host', 'ready', 'status'].sort();
+  const PLAYER = ['id', 'nickname', 'is_host', 'submitted_count', 'status'].sort();
   const NOW = ['position', 'song_id', 'title', 'artist', 'artwork_url', 'duration_ms', 'elapsed_ms', 'is_running', 'as_of'].sort();
 
   async function checkAll(currentSongId) {
     for (const p of players) {
       const st = await p.user.state(roomId);
       assert.deepEqual(Object.keys(st).sort(), TOP, 'no unexpected top-level fields');
-      for (const pl of st.players) assert.deepEqual(Object.keys(pl).sort(), PLAYER, 'no per-player counts');
+      for (const pl of st.players) {
+        assert.deepEqual(Object.keys(pl).sort(), PLAYER);
+        if (st.status !== 'lobby') assert.equal(pl.submitted_count, null, 'no per-player counts in play');
+      }
       if (st.now_playing) {
         assert.deepEqual(Object.keys(st.now_playing).sort(), NOW, 'now playing carries no owner');
       }

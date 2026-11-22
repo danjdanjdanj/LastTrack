@@ -36,26 +36,31 @@ test('quota of 3, 4 or 5 only', async () => {
   }
 });
 
-test('own quota enforced; ready requires exactly the quota; editing locked while ready', async () => {
-  const { roomId, players } = await setupLobby(2, 3, { submit: false });
+test('own quota enforced; lobby shows live per-player counts (e.g. 4/5)', async () => {
+  const { roomId, host, players } = await setupLobby(2, 5, { fill: false });
   const me = players[1].user;
-  const full = await me.rpc('add_nomination', { p_room_id: roomId, ...song() });
+  for (let i = 0; i < 5; i++) await host.rpc('add_nomination', { p_room_id: roomId, ...song() });
+  for (let i = 0; i < 4; i++) await me.rpc('add_nomination', { p_room_id: roomId, ...song() });
+  let st = await host.state(roomId);
+  assert.deepEqual(st.players.map((p) => [p.nickname, p.submitted_count]), [['Host', 5], ['Player1', 4]]);
+  await expectError(host.rpc('lock_room', { p_room_id: roomId }), 'players_not_ready');
+
+  const full = await host.rpc('add_nomination', { p_room_id: roomId, ...song() });
   assert.deepEqual(full, { ok: false, error: 'quota_full' });
 
   const mine = await me.rpc('my_nominations', { p_room_id: roomId });
-  assert.equal(mine.length, 3);
   await me.rpc('remove_nomination', { p_room_id: roomId, p_nomination_id: mine[0].id });
-  await expectError(me.rpc('set_ready', { p_room_id: roomId, p_ready: true }), 'quota_not_met');
+  st = await host.state(roomId);
+  assert.equal(st.players[1].submitted_count, 3, 'removal updates the count');
   await me.rpc('add_nomination', { p_room_id: roomId, ...song() });
-  await me.rpc('set_ready', { p_room_id: roomId, p_ready: true });
-  await expectError(me.rpc('add_nomination', { p_room_id: roomId, ...song() }), 'already_submitted');
-  await me.rpc('set_ready', { p_room_id: roomId, p_ready: false });
-  const st = await me.state(roomId);
-  assert.equal(st.players[1].ready, false);
+  await me.rpc('add_nomination', { p_room_id: roomId, ...song() });
+  await host.rpc('lock_room', { p_room_id: roomId });
+  st = await me.state(roomId);
+  assert.ok(st.players.every((p) => p.submitted_count === null), 'counts hidden once locked');
 });
 
 test('duplicate catalogue IDs rejected with a neutral message', async () => {
-  const { roomId, code, players } = await setupLobby(3, 3, { submit: false });
+  const { roomId, code, players } = await setupLobby(3, 3);
   const taken = players[0].songs[0];
   const late = newUser();
   await late.rpc('join_room', { p_code: code, p_nickname: 'Late' });
@@ -91,7 +96,7 @@ test('one player cannot exceed quota with parallel adds', async () => {
 });
 
 test('cannot remove someone else\'s nomination', async () => {
-  const { roomId, players } = await setupLobby(2, 3, { submit: false });
+  const { roomId, players } = await setupLobby(2, 3);
   const theirs = await players[0].user.rpc('my_nominations', { p_room_id: roomId });
   await players[1].user.rpc('remove_nomination', { p_room_id: roomId, p_nomination_id: theirs[0].id });
   assert.equal((await players[0].user.rpc('my_nominations', { p_room_id: roomId })).length, 3);
@@ -102,9 +107,10 @@ test('lock rules: host only, everyone ready, at least 2 players, once only', asy
   const r1 = await solo.rpc('create_room', { p_nickname: 'H', p_song_quota: 3 });
   await expectError(solo.rpc('lock_room', { p_room_id: r1.room_id }), 'not_enough_players');
 
-  const { roomId, host, players, code } = await setupLobby(3, 3, { submit: false });
+  const { roomId, host, players, code } = await setupLobby(3, 3);
   await expectError(players[1].user.rpc('lock_room', { p_room_id: roomId }), 'host_only');
-  for (const p of players.slice(0, 2)) await p.user.rpc('set_ready', { p_room_id: roomId, p_ready: true });
+  const last = await players[2].user.rpc('my_nominations', { p_room_id: roomId });
+  await players[2].user.rpc('remove_nomination', { p_room_id: roomId, p_nomination_id: last[0].id });
   await expectError(host.rpc('lock_room', { p_room_id: roomId }), 'players_not_ready');
 
   // Host removes the inactive player, then can lock.
@@ -114,7 +120,8 @@ test('lock rules: host only, everyone ready, at least 2 players, once only', asy
   await expectError(host.rpc('lock_room', { p_room_id: roomId }), 'already_locked');
 
   await expectError(newUser().rpc('join_room', { p_code: code, p_nickname: 'Late' }), 'game_already_started');
-  await expectError(players[1].user.rpc('set_ready', { p_room_id: roomId, p_ready: false }), 'game_already_started');
+  const mine = await players[1].user.rpc('my_nominations', { p_room_id: roomId });
+  await expectError(players[1].user.rpc('remove_nomination', { p_room_id: roomId, p_nomination_id: mine[0].id }), 'game_already_started');
   await expectError(players[1].user.rpc('add_nomination', { p_room_id: roomId, ...song() }), 'game_already_started');
   await expectError(host.rpc('remove_participant', { p_room_id: roomId, p_participant_id: players[1].seat.participant_id }), 'game_already_started');
 

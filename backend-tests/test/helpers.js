@@ -64,8 +64,8 @@ export function song(overrides = {}) {
   };
 }
 
-// Host + (n-1) players, every player nominates `quota` unique songs and submits.
-export async function setupLobby(nPlayers = 4, quota = 3, { submit = true } = {}) {
+// Host + (n-1) players; with fill, every player nominates `quota` unique songs.
+export async function setupLobby(nPlayers = 4, quota = 3, { fill = true } = {}) {
   const host = newUser();
   const created = await host.rpc('create_room', { p_nickname: 'Host', p_song_quota: quota });
   const roomId = created.room_id;
@@ -76,13 +76,13 @@ export async function setupLobby(nPlayers = 4, quota = 3, { submit = true } = {}
     players.push({ user: u, seat, songs: [] });
   }
   for (const p of players) {
+    if (!fill) continue;
     for (let k = 0; k < quota; k++) {
       const s = song();
       const res = await p.user.rpc('add_nomination', { p_room_id: roomId, ...s });
       if (!res.ok) throw new Error(`setup add failed: ${JSON.stringify(res)}`);
       p.songs.push(s);
     }
-    if (submit) await p.user.rpc('set_ready', { p_room_id: roomId, p_ready: true });
   }
   return { roomId, code: created.code, host, players };
 }
