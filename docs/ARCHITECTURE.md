@@ -34,7 +34,7 @@
 | Winner | Owner of the last track in the locked order, set by the server |
 | No skipping | Server rejects "track finished" until the track has nearly played out by the server clock |
 | Recovery | `host_play` is idempotent and returns the current track and elapsed time. Pages re-fetch on reconnect, when brought back on screen and every 10s |
-| Unplayable songs | Search only offers songs playable in the AU catalogue, so players replace before GO. If one still fails mid-game: retry, then the host marks it unplayable (revealed, counts as played, order unchanged) |
+| Unplayable songs | Search only offers songs playable in the AU catalogue, so players replace before GO. If one still fails mid-game: retry, then the host marks it unplayable (revealed, counts as played, order unchanged). Approved |
 
 **Conventions:**
 1. "Tracks left" includes the track currently playing.
@@ -66,5 +66,5 @@
 ## 7. Known limitations
 
 1. Song metadata comes from the player's browser. A tampered page could mislabel only its own song. The order and the owners are unaffected.
-2. Rooms are not cleaned up automatically yet (planned: delete rooms older than 48 hours).
+2. Rooms and all their data are deleted 48 hours after creation (hourly pg_cron job).
 3. Up to 16 players per room.
